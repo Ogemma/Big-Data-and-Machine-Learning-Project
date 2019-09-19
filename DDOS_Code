@@ -1,0 +1,148 @@
+from kafka import KafkaProducer
+cat /c/Users/micha/Desktop/phdata/apache-access-log.txt | kafka-console-producer.bat \
+--broker-list localhost:9092 \
+--topic phdata4
+
+from kafka import KafkaConsumer
+consumer = KafkaConsumer('phdata4')
+
+# I am having problem connecting my model to the consumer.
+# When I run my code using print message, my code generates the log files from kafka cluster. 
+# but when i try to connect the consumer to my machine learning model, i am unable to do this
+# I get an error message saying the kafka.consumer.group.kafkaConsumer does not recognize this attribute. 
+# the class of my data stored in consumer variable is kafka.consumer.group.KafkaConsumer. 
+# I am trying to convert this to a dataframe so i can apply my model to it. 
+
+for message in consumer:
+    print (message)
+    
+
+    
+import re
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime
+import pytz 
+from time import sleep
+from json import dumps
+
+   
+def parse_str(x):
+    return x[1:-1]
+"""
+    Returns the string delimited by two characters.
+
+    Example:
+        `>>> parse_str('[my string]')`
+        `'my string'`
+    """
+def parse_datetime(x):
+    '''
+    Parses datetime with timezone formatted as:
+        `[day/month/year:hour:minute:second zone]`
+
+    Example:
+        `>>> parse_datetime('13/Nov/2015:11:45:42 +0000')`
+        `datetime.datetime(2015, 11, 3, 11, 45, 4, tzinfo=<UTC>)`
+
+    Due to problems parsing the timezone (`%z`) with `datetime.strptime`, the
+    timezone will be obtained using the `pytz` library.
+    '''
+    dt = datetime.strptime(x[1:-7], '%d/%b/%Y:%H:%M:%S')
+    dt_tz = int(x[-6:-3])*60+int(x[-3:-1])
+    return dt.replace(tzinfo=pytz.FixedOffset(dt_tz))
+
+# Read training data from local file and transform log file into a dataframe
+data = pd.read_csv('apache-access-log.txt',
+        sep=r'\s(?=(?:[^"]*"[^"]*")*[^"]*$)(?![^\[]*\])',
+        engine='python',
+        na_values='-',
+        header=None,
+        usecols=[0, 3, 4, 5, 6, 7, 8],
+        names=['ip', 'time', 'request', 'status', 'size', 'referer', 'user_agent'],
+        converters={'time': parse_datetime,
+                    'request': parse_str,
+                    'status': int,
+                    'size': int,
+                    'referer': parse_str,
+                    'user_agent': parse_str})
+
+# Update data by adding a new feature (length of the user_agent)
+#All user_agent length below 30 is represented by 1
+data ['user_agent_length'] = data['user_agent'].apply(len)   
+data.loc[data.user_agent_length <= 30, 'Possible_DDOS'] = 1 
+data.loc[data.user_agent_length > 30, 'Possible_DDOS'] = 0
+
+#seperate target from matrix 
+X = data.iloc[:, [3,7]].values
+y = data.iloc[:, 8].values
+
+
+# Splitting the dataset into the Training set and Test set
+from sklearn.cross_validation import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.25, random_state = 0)
+
+# Feature Scaling
+from sklearn.preprocessing import StandardScaler
+sc = StandardScaler()
+X_train = sc.fit_transform(X_train)
+X_test = sc.transform(X_test)
+
+
+# Fitting Logistic Regression to the Training set
+from sklearn.linear_model import LogisticRegression
+classifier = LogisticRegression(random_state = 0)
+classifier.fit(X_train, y_train)
+
+# Predicting the Test set results
+y_pred = classifier.predict(X_test)
+
+print ("Train accuracy" + str(classifier.score(X_train, y_train)))
+print ("Train accuracy" + str(classifier.score(X_test, y_test)))
+
+
+# Making the Confusion Matrix
+from sklearn.metrics import confusion_matrix
+cm = confusion_matrix(y_test, y_pred)
+
+
+
+
+# Deploy model to predict target using new file 
+Access_log = pd.read_csv(
+        'apache-access-log.txt',
+        sep=r'\s(?=(?:[^"]*"[^"]*")*[^"]*$)(?![^\[]*\])',
+        engine='python',
+        na_values='-',
+        header=None,
+        usecols=[0, 3, 4, 5, 6, 7, 8],
+        names=['ip', 'time', 'request', 'status', 'size', 'referer', 'user_agent'],
+        converters={'time': parse_datetime,
+                    'request': parse_str,
+                    'status': int,
+                    'size': int,
+                    'referer': parse_str,
+                    'user_agent': parse_str})
+
+# Update data by adding a new feature (length of the user_agent)
+Access_log ['user_agent_length'] = Access_log['user_agent'].apply(len)
+
+
+# Apply Machine learning algorithm to new data
+Access_log_test = Access_log.iloc[:, [3,7]].values
+Access_log_test_transform = sc.transform(Access_log_test)
+Access_log['Possible_DDOS'] = classifier.predict(Access_log_test_transform)
+
+
+# Review Completeness steps
+Review1 = Access_log.query('Possible_DDOS==1')
+Review2 = Access_log.query('user_agent_length<30')
+print("No of possible DDOS Attack" + " " + str(len(Review1)))
+print("No of user agent with length less than 30" + " " + str(len(Review2)))
+
+
+# Visualising Completeness Result
+
+
+# Save possible DDOS attack report in an alert directory
