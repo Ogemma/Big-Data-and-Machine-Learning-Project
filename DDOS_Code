@@ -1,22 +1,40 @@
-from kafka import KafkaProducer
+#kafka Producer
+
 cat /c/Users/micha/Desktop/phdata/apache-access-log.txt | kafka-console-producer.bat \
 --broker-list localhost:9092 \
 --topic phdata4
 
-from kafka import KafkaConsumer
-consumer = KafkaConsumer('phdata4')
+#Kafka Consumer 
 
-# I am having problem connecting my model to the consumer.
-# When I run my code using print message, my code generates the log files from kafka cluster. 
-# but when i try to connect the consumer to my machine learning model, i am unable to do this
-# I get an error message saying the kafka.consumer.group.kafkaConsumer does not recognize this attribute. 
-# the class of my data stored in consumer variable is kafka.consumer.group.KafkaConsumer. 
-# I am trying to convert this to a dataframe so i can apply my model to it. 
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.streaming.Trigger
 
-for message in consumer:
-    print (message)
+val spark = SparkSession.
+  builder.
+  master("local").
+  appName("demo").
+  getOrCreate    
+  
+val data = spark.readStream.
+  format("kafka").
+  option("kafka.bootstrap.servers", "localhost:9092").
+  option("subscribe", "phdata8").
+  load()  
+  
+Val ViewData = data.writeStream.
+    format("console").
+    outputMode("append").
+    trigger(Trigger.ProcessingTime("3 seconds")).
     
+    
+ViewData.start()
+ViewData.awaitTermination()
 
+#I am having problem viewing my data on my console. When I run my read from stream code, and printSchema, I can see my code executed properly. 
+# but when i try to run my writeStream code, I get an error message stating
+# error writing stream metadata to file
+# I tried both scala and python and got the same error message. My machine learning model below is in python. I can not apply the model to the dataframe
+# yet because of this error.
     
 import re
 import pandas as pd
