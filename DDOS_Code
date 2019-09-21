@@ -1,166 +1,39 @@
-#kafka Producer
+#Kafka Producer Using Python
 
-cat /c/Users/micha/Desktop/phdata/apache-access-log.txt | kafka-console-producer.bat \
---broker-list localhost:9092 \
---topic phdata4
+import json
+from pyspark.sql import types as spark_type
+from pyspark.sql import SparkSession # this will help me run this code as a program
 
-#Kafka Consumer 
-
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.streaming.Trigger
-
-val spark = SparkSession.
-  builder.
-  master("local").
-  appName("demo").
-  getOrCreate    
-  
-val data = spark.readStream.
-  format("kafka").
-  option("kafka.bootstrap.servers", "localhost:9092").
-  option("subscribe", "phdata8").
-  load()  
-  
-Val ViewData = data.writeStream.
-    format("console").
-    outputMode("append").
-    trigger(Trigger.ProcessingTime("3 seconds")).
-    
-    
-ViewData.start()
-ViewData.awaitTermination()
-
-#I am having problem viewing my data on my console. When I run my read from stream code, and printSchema, I can see my code executed properly. 
-# but when i try to run my writeStream code, I get an error message stating
-# error writing stream metadata to file
-# I tried both scala and python and got the same error message. My machine learning model below is in python. I can not apply the model to the dataframe
-# yet because of this error.
-    
-import re
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from datetime import datetime
-import pytz 
-from time import sleep
-from json import dumps
-
-   
-def parse_str(x):
-    return x[1:-1]
+schema_string = """
+{"fields":[
+        {"metadata":{},"name":"ip","nullable":true,"type":"string"},
+        {"metadata":{},"name":"_c1","nullable":true,"type":"string"},
+        {"metadata":{},"name":"_c2","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Time","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Time_Zone","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Request","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Status","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Size","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Referer","nullable":true,"type":"string"},
+        {"metadata":{},"name":"User_Agent","nullable":true,"type":"string"}
+],"type":"struct"}
 """
-    Returns the string delimited by two characters.
+schema = spark_type.StructType.fromJson(json.loads(schema_string))
 
-    Example:
-        `>>> parse_str('[my string]')`
-        `'my string'`
-    """
-def parse_datetime(x):
-    '''
-    Parses datetime with timezone formatted as:
-        `[day/month/year:hour:minute:second zone]`
+spark = SparkSession.builder.appName("phdata_producer").getOrCreate() # initalizing spark
 
-    Example:
-        `>>> parse_datetime('13/Nov/2015:11:45:42 +0000')`
-        `datetime.datetime(2015, 11, 3, 11, 45, 4, tzinfo=<UTC>)`
+df = spark.read.csv("/phdata/apache-access-log.txt",sep=" ", schema=schema)\
+    .select("ip","Time","Time_Zone","Request","Status","Size","Referer","User_Agent")
 
-    Due to problems parsing the timezone (`%z`) with `datetime.strptime`, the
-    timezone will be obtained using the `pytz` library.
-    '''
-    dt = datetime.strptime(x[1:-7], '%d/%b/%Y:%H:%M:%S')
-    dt_tz = int(x[-6:-3])*60+int(x[-3:-1])
-    return dt.replace(tzinfo=pytz.FixedOffset(dt_tz))
+def generate_json_payload_from_columns(row):
+        payload = {}
+        for f in row.__fields__:
+            payload[f] = row[f]
+        return payload
 
-# Read training data from local file and transform log file into a dataframe
-data = pd.read_csv('apache-access-log.txt',
-        sep=r'\s(?=(?:[^"]*"[^"]*")*[^"]*$)(?![^\[]*\])',
-        engine='python',
-        na_values='-',
-        header=None,
-        usecols=[0, 3, 4, 5, 6, 7, 8],
-        names=['ip', 'time', 'request', 'status', 'size', 'referer', 'user_agent'],
-        converters={'time': parse_datetime,
-                    'request': parse_str,
-                    'status': int,
-                    'size': int,
-                    'referer': parse_str,
-                    'user_agent': parse_str})
+df_json = spark.createDataFrame(df.rdd.map(lambda x: {"value": json.dumps(generate_json_payload_from_columns(x))}))
 
-# Update data by adding a new feature (length of the user_agent)
-#All user_agent length below 30 is represented by 1
-data ['user_agent_length'] = data['user_agent'].apply(len)   
-data.loc[data.user_agent_length <= 30, 'Possible_DDOS'] = 1 
-data.loc[data.user_agent_length > 30, 'Possible_DDOS'] = 0
-
-#seperate target from matrix 
-X = data.iloc[:, [3,7]].values
-y = data.iloc[:, 8].values
-
-
-# Splitting the dataset into the Training set and Test set
-from sklearn.cross_validation import train_test_split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.25, random_state = 0)
-
-# Feature Scaling
-from sklearn.preprocessing import StandardScaler
-sc = StandardScaler()
-X_train = sc.fit_transform(X_train)
-X_test = sc.transform(X_test)
-
-
-# Fitting Logistic Regression to the Training set
-from sklearn.linear_model import LogisticRegression
-classifier = LogisticRegression(random_state = 0)
-classifier.fit(X_train, y_train)
-
-# Predicting the Test set results
-y_pred = classifier.predict(X_test)
-
-print ("Train accuracy" + str(classifier.score(X_train, y_train)))
-print ("Train accuracy" + str(classifier.score(X_test, y_test)))
-
-
-# Making the Confusion Matrix
-from sklearn.metrics import confusion_matrix
-cm = confusion_matrix(y_test, y_pred)
-
-
-
-
-# Deploy model to predict target using new file 
-Access_log = pd.read_csv(
-        'apache-access-log.txt',
-        sep=r'\s(?=(?:[^"]*"[^"]*")*[^"]*$)(?![^\[]*\])',
-        engine='python',
-        na_values='-',
-        header=None,
-        usecols=[0, 3, 4, 5, 6, 7, 8],
-        names=['ip', 'time', 'request', 'status', 'size', 'referer', 'user_agent'],
-        converters={'time': parse_datetime,
-                    'request': parse_str,
-                    'status': int,
-                    'size': int,
-                    'referer': parse_str,
-                    'user_agent': parse_str})
-
-# Update data by adding a new feature (length of the user_agent)
-Access_log ['user_agent_length'] = Access_log['user_agent'].apply(len)
-
-
-# Apply Machine learning algorithm to new data
-Access_log_test = Access_log.iloc[:, [3,7]].values
-Access_log_test_transform = sc.transform(Access_log_test)
-Access_log['Possible_DDOS'] = classifier.predict(Access_log_test_transform)
-
-
-# Review Completeness steps
-Review1 = Access_log.query('Possible_DDOS==1')
-Review2 = Access_log.query('user_agent_length<30')
-print("No of possible DDOS Attack" + " " + str(len(Review1)))
-print("No of user agent with length less than 30" + " " + str(len(Review2)))
-
-
-# Visualising Completeness Result
-
-
-# Save possible DDOS attack report in an alert directory
+df_json.write.format("kafka") \
+    .option("kafka.bootstrap.servers", "sandbox-hdp.hortonworks.com:9092") \
+    .option("topic", "phdata9") \
+    .save()
