@@ -85,7 +85,7 @@ df_select = df_struct.selectExpr("ms.ip as ip","ms.Time as Time","ms.Time_Zone a
               "ms.Request as Request","ms.Status as Status","ms.Size as Size",
               "ms.Referer as Referer","ms.User_Agent as User_agent")
 
-df_final = df_select.where(length(col("User_agent")) <30)
+df_final = df_select.where(length(col("User_agent")) <30).select("ip")
 
 df_stream = df_final.writeStream \
     .format("json") \
@@ -96,6 +96,9 @@ df_stream = df_final.writeStream \
     .start()
     
 df_stream.awaitTermination()
+
+
+
 
 
 
@@ -120,7 +123,7 @@ schema_string = """
 schema = spark_type.StructType.fromJson(json.loads(schema_string))
 
 
-#Read json file from broker topic phdata8
+#Read json file from broker topic
 df = spark \
     .readStream \
     .format("kafka") \
@@ -128,25 +131,26 @@ df = spark \
     .option("subscribe", "phdata9") \
     .option("startingOffsets", "earliest")\
     .load()
-    
+
+
 # Print the value in the json file
 df_string = df.selectExpr("cast(value as string) as message")
 
-#apply Schema to message
+
+
+#apply Schema to message (string)
 df_struct = df_string.select(spark_func.from_json("message",schema).alias("ms"))
 
 
-#change feature label 
+#change features label 
 df_select = df_struct.selectExpr("ms.ip as ip","ms.Time as Time","ms.Time_Zone as Time_Zone",
               "ms.Request as Request","ms.Status as Status","ms.Size as Size",
               "ms.Referer as Referer","ms.User_Agent as User_agent")
 
 
-# Apply query to generate all IP addresses with greater than
-# 3 request per second
-# convert the string time stamp to a time stamp typpe
 
 
+# Query data to generate all IP addresses with 10 plus request 
 df_query = df_select.select("ip",
                             spark_func.from_unixtime(spark_func.unix_timestamp(spark_func.substring("time",2,17),"dd/MMM/yyyy:HH:mm:ss")).cast(spark_type.TimestampType()).alias("ts")
                             ) \
@@ -154,13 +158,18 @@ df_query = df_select.select("ip",
 
 df_final = df_query.select("ip","count")
 
-# this is used to print out the messages in the topic   
-df_stream = df_final.writeStream \
-    .format("json") \
-    .option("path", "/tmp/result2") \
-    .option("checkpointLocation", "/tmp/checkpoint") \
+
+
+#save result in Kafka topic
+df_stream = df_final.selectExpr("CAST(ip AS STRING) AS key", "to_json(struct(*)) AS value") \
+    .writeStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", "sandbox-hdp.hortonworks.com:9092") \
+    .option("topic", "phdata12") \
+    .option("checkpointLocation", "/tmp/checkpoint4") \
     .outputMode("complete") \
     .trigger(processingTime='2 seconds') \
     .start()
+    
 
 df_stream.awaitTermination()
