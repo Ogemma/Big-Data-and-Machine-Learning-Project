@@ -1,9 +1,9 @@
-#Kafka Producer 
-
+# import all the classes and objects needed for this project
 import json
 from pyspark.sql import types as spark_type
-from pyspark.sql import SparkSession # this will help me run this code as a program
+from pyspark.sql import SparkSession
 
+# log-file schema
 schema_string = """
 {"fields":[
         {"metadata":{},"name":"ip","nullable":true,"type":"string"},
@@ -20,29 +20,122 @@ schema_string = """
 """
 schema = spark_type.StructType.fromJson(json.loads(schema_string))
 
-spark = SparkSession.builder.appName("phdata_producer").getOrCreate() # initalizing spark
+spark = SparkSession.builder.appName("phdata_producer").getOrCreate()
 
-df = spark.read.csv("/phdata/apache-access-log.txt",sep=" ", schema=schema)\
+
+#Read log file from hdfs and apply schema to the data
+producer_df = spark.read.csv("/tmp/phdata/apache-access-log.txt",sep=" ", schema=schema) \
     .select("ip","Time","Time_Zone","Request","Status","Size","Referer","User_Agent")
 
+#transform data back to json
 def generate_json_payload_from_columns(row):
         payload = {}
         for f in row.__fields__:
             payload[f] = row[f]
         return payload
 
-df_json = spark.createDataFrame(df.rdd.map(lambda x: {"value": json.dumps(generate_json_payload_from_columns(x))}))
+#create dataframe and dump in json format
+df_json = spark.createDataFrame(producer_df.rdd.map(lambda x: {"value": json.dumps(generate_json_payload_from_columns(x))}))
 
+#Write file to Kafka Topic
 df_json.write.format("kafka") \
     .option("kafka.bootstrap.servers", "sandbox-hdp.hortonworks.com:9092") \
-    .option("topic", "phdata9") \
+    .option("topic", "phdata30") \
     .save()
 
 
+# Consumer 1 used to Stream file from kafka topic
+# Read json file from kafka topic
+import json
+from pyspark.sql import functions as spark_func
+from pyspark.sql import types as spark_type
 
-#Kafka Consumer 1
+schema_string = """
+{"fields":[
+        {"metadata":{},"name":"ip","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Time","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Time_Zone","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Request","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Status","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Size","nullable":true,"type":"string"},
+        {"metadata":{},"name":"Referer","nullable":true,"type":"string"},
+        {"metadata":{},"name":"User_Agent","nullable":true,"type":"string"}
+],"type":"struct"}
+"""
+schema = spark_type.StructType.fromJson(json.loads(schema_string))
+
+# Read json file from broker topic
+df = spark \
+    .readStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", "sandbox-hdp.hortonworks.com:9092") \
+    .option("subscribe", "phdata30") \
+    .option("startingOffsets", "earliest") \
+    .load()
+
+df_string = df.selectExpr("cast(value as string) as message")
+
+# Apply Schema to data
+df_struct = df_string.select(spark_func.from_json("message", schema).alias("ms"))
+
+# Rename features
+df_select = df_struct.selectExpr("ms.ip as ip", "ms.Time as Time", "ms.Time_Zone as Time_Zone",
+                                 "ms.Request as Request", "ms.Status as Status", "ms.Size as Size",
+                                 "ms.Referer as Referer", "ms.User_Agent as User_agent")
+
+# Apply query to generate all IP addresses with greater than 3 request per minute
+# convert the string time stamp to a time stamp typpe
+df_query = df_select \
+    .select("ip",spark_func.from_unixtime(spark_func.unix_timestamp(spark_func.substring("time", 2, 17),"dd/MMM/yyyy:HH:mm:ss")).cast(spark_type.TimestampType()) .alias("ts")) \
+    .withWatermark("ts", "10 minutes")\
+    .groupBy("ts", "ip")\
+    .count()\
+    .filter("count > 10")
+
+df_final = df_query.select("ip", "count")
+
+# Save query result to kafka topic
+df_stream = df_final.selectExpr("CAST(ip AS STRING) AS key", "to_json(struct(*)) AS value") \
+    .writeStream \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", "sandbox-hdp.hortonworks.com:9092") \
+    .option("topic", "phdata31") \
+    .option("checkpointLocation", "/tmp/checkpoint3") \
+    .outputMode("complete") \
+    .trigger(processingTime='2 seconds') \
+    .start()
+
+df_stream.awaitTermination()
 
 
+
+#Verify data was properly transfered to kafka topic
+import json
+from pyspark.sql import functions as spark_func
+from pyspark.sql import types as spark_type
+
+#Apply this schema to result
+schema_string = """
+{"fields":[
+        {"metadata":{},"name":"ip","nullable":true,"type":"string"},
+        {"metadata":{},"name":"count","nullable":true,"type":"string"}
+],"type":"struct"}
+"""
+schema = spark_type.StructType.fromJson(json.loads(schema_string))
+
+df = spark.read \
+    .format("kafka") \
+    .option("kafka.bootstrap.servers", "sandbox-hdp.hortonworks.com:9092") \
+    .option("subscribe", "phdata31") \
+    .load()
+
+df_string = df.selectExpr("cast(value as string) as message")
+df1 = df_string.select(spark_func.from_json("message", schema).alias("ms"))
+df1.show(5,False)
+
+
+
+#Consumer 2
 import json
 from pyspark.sql import functions as spark_func
 from pyspark.sql import types as spark_type
@@ -63,113 +156,35 @@ schema_string = """
 """
 schema = spark_type.StructType.fromJson(json.loads(schema_string))
 
-
-#Read json file from broker topic phdata8
+# Read json file from broker topic phdata8
 df = spark \
     .readStream \
     .format("kafka") \
     .option("kafka.bootstrap.servers", "sandbox-hdp.hortonworks.com:9092") \
     .option("subscribe", "phdata9") \
-    .option("startingOffsets", "earliest")\
+    .option("startingOffsets", "earliest") \
     .load()
-    
+
 # Print the value in the json file
 df_string = df.selectExpr("cast(value as string) as message")
 
-#apply Schema to message
-df_struct = df_string.select(spark_func.from_json("message",schema).alias("ms"))
+# apply Schema to message
+df_struct = df_string.select(spark_func.from_json("message", schema).alias("ms"))
 
+# Rename features
+df_select = df_struct.selectExpr("ms.ip as ip", "ms.Time as Time", "ms.Time_Zone as Time_Zone",
+                                 "ms.Request as Request", "ms.Status as Status", "ms.Size as Size",
+                                 "ms.Referer as Referer", "ms.User_Agent as User_agent")
+ 
+con_df_final = df_select.where(length(col("User_agent")) <30)
 
-#change feature label 
-df_select = df_struct.selectExpr("ms.ip as ip","ms.Time as Time","ms.Time_Zone as Time_Zone",
-              "ms.Request as Request","ms.Status as Status","ms.Size as Size",
-              "ms.Referer as Referer","ms.User_Agent as User_agent")
-
-df_final = df_select.where(length(col("User_agent")) <30).select("ip")
-
-df_stream = df_final.writeStream \
+# this is used to print out the messages in the topic
+con_df_stream = con_df_final.writeStream \
     .format("json") \
     .option("path", "/tmp/result") \
     .option("checkpointLocation", "/tmp/checkpoint") \
     .outputMode("Append") \
     .trigger(processingTime='2 seconds') \
     .start()
-    
-df_stream.awaitTermination()
 
-
-
-
-
-
-#kafka Consumer 2
-
-import json
-from pyspark.sql import functions as spark_func
-from pyspark.sql import types as spark_type
-
-schema_string = """
-{"fields":[
-        {"metadata":{},"name":"ip","nullable":true,"type":"string"},
-        {"metadata":{},"name":"Time","nullable":true,"type":"string"},
-        {"metadata":{},"name":"Time_Zone","nullable":true,"type":"string"},
-        {"metadata":{},"name":"Request","nullable":true,"type":"string"},
-        {"metadata":{},"name":"Status","nullable":true,"type":"string"},
-        {"metadata":{},"name":"Size","nullable":true,"type":"string"},
-        {"metadata":{},"name":"Referer","nullable":true,"type":"string"},
-        {"metadata":{},"name":"User_Agent","nullable":true,"type":"string"}
-],"type":"struct"}
-"""
-schema = spark_type.StructType.fromJson(json.loads(schema_string))
-
-
-#Read json file from broker topic
-df = spark \
-    .readStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", "sandbox-hdp.hortonworks.com:9092") \
-    .option("subscribe", "phdata9") \
-    .option("startingOffsets", "earliest")\
-    .load()
-
-
-# Print the value in the json file
-df_string = df.selectExpr("cast(value as string) as message")
-
-
-
-#apply Schema to message (string)
-df_struct = df_string.select(spark_func.from_json("message",schema).alias("ms"))
-
-
-#change features label 
-df_select = df_struct.selectExpr("ms.ip as ip","ms.Time as Time","ms.Time_Zone as Time_Zone",
-              "ms.Request as Request","ms.Status as Status","ms.Size as Size",
-              "ms.Referer as Referer","ms.User_Agent as User_agent")
-
-
-
-
-# Query data to generate all IP addresses with 10 plus request 
-df_query = df_select.select("ip",
-                            spark_func.from_unixtime(spark_func.unix_timestamp(spark_func.substring("time",2,17),"dd/MMM/yyyy:HH:mm:ss")).cast(spark_type.TimestampType()).alias("ts")
-                            ) \
-.withWatermark("ts", "10 minutes").groupBy("ts","ip").count().filter("count > 10")
-
-df_final = df_query.select("ip","count")
-
-
-
-#save result in Kafka topic
-df_stream = df_final.selectExpr("CAST(ip AS STRING) AS key", "to_json(struct(*)) AS value") \
-    .writeStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", "sandbox-hdp.hortonworks.com:9092") \
-    .option("topic", "phdata12") \
-    .option("checkpointLocation", "/tmp/checkpoint4") \
-    .outputMode("complete") \
-    .trigger(processingTime='2 seconds') \
-    .start()
-    
-
-df_stream.awaitTermination()
+con_df_stream.awaitTermination()
