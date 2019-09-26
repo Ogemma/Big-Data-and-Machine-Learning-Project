@@ -1,4 +1,4 @@
-# import all the classes and objects needed for this project
+# import all the classes needed for this project
 import json
 from pyspark.sql import types as spark_type
 from pyspark.sql import SparkSession
@@ -27,15 +27,15 @@ spark = SparkSession.builder.appName("phdata_producer").getOrCreate()
 producer_df = spark.read.csv("/tmp/phdata/apache-access-log.txt",sep=" ", schema=schema) \
     .select("ip","Time","Time_Zone","Request","Status","Size","Referer","User_Agent")
 
-#transform data back to json
+#combine all column to one column with json string
 def generate_json_payload_from_columns(row):
         payload = {}
         for f in row.__fields__:
             payload[f] = row[f]
         return payload
 
-#create dataframe and dump in json format
 df_json = spark.createDataFrame(producer_df.rdd.map(lambda x: {"value": json.dumps(generate_json_payload_from_columns(x))}))
+
 
 #Write file to Kafka Topic
 df_json.write.format("kafka") \
@@ -45,7 +45,6 @@ df_json.write.format("kafka") \
 
 
 # Consumer 1 used to Stream file from kafka topic
-# Read json file from kafka topic
 import json
 from pyspark.sql import functions as spark_func
 from pyspark.sql import types as spark_type
