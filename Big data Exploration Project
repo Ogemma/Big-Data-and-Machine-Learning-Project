@@ -1,0 +1,344 @@
+
+Retrive data from ST thomas GPC Cluster and address key questions below. 
+
+First Dataset Trademark Owner
+Read Trademark owner dataset from St thomas GPS cluster 
+Code : val trademark = sc.textFile("owner.csv")
+Result : trademark: org.apache.spark.rdd.RDD[String] = owner.csv MapPartitionsRDD[1] at textFile at <console>:27
+
+Review number of records  
+
+Code :  Trademark_Owner.count()
+Result : res2: Long = 18555925
+
+What is the current partition size assigned to my RDD? Change the partition size and compare the performance using the take(5) 
+
+Code : trademark.partitions.size
+Result: res0: Int = 16
+Code : val trademarkp = trademark.repartition(5)
+Result : trademarkp: org.apache.spark.rdd.RDD[String] = MapPartitionsRDD[9] at repartition at <console>:29
+
+Code : val runtime = System.nanoTime
+Result : runtime: Long = 17156782974315726
+
+Code trademark.take(5)
+Result :res5:Array[String]Array(own_addr_1,own_addr_2,own_addr_city,own_composed_of,own_addr_country_cd,own_altn_name,own_entity_desc,own_seq,own_entity_cd,own_nalty_country_cd,own_nalty_other_cd,own_nalty_state_cd,own_addr_other_cd,own_name,own_type_cd,own_addr_postal,own_addr_state_cd,own_id,serial_no, ,501 FIFTH AVENUE,NEW YORK,,,,,1,3,,,NY,,AUTO ORDNANCE CORPORATION,10,90015,NY,1,60146682, ,302 Broadway,New York,,,,,1,3,,,NY,,AUTO-ORDNANCE CORPORATION,10,90015,NY,2,60149828, 2090 THORNTON ROAD,,FERNDALE,,,,,1,3,,,WA,,"SAMSON ROPE TECHNOLOGIES, INC.",43,98248,WA,3,70011210, 2090 THORNTON STREET,,FERNDALE,,,,,1,3,,,DE,,"SAMSON OCEAN SYSTEMS, INC.",42,98248,WA,4,70011210)
+
+Code: val duration = (System.nanoTime - runtime)
+Result for file with 5 partition: duration: Long = 71574752237
+
+Code : trademarkp.take(5)
+Result : res6: Array[String] = Array(,12221 BEAVER PIKE,JACKSON,,,DBA HOME BUSINESS NEWS,,1,1,US,,,,"SIMPSON, EDWIN L.",10,45640,OH,1314135,73487659, IMPERIAL CHEMICAL HOUSE,,"MILLBANK, LONDON",,,,PUBLIC LIMITED COMPANY,1,99,GB,,,GB2,IMPERIAL CHEMICAL INDUSTRIES PLC,30,,,1314140,73487662, ,1225 Bordeaux Dr.,Sunnyvale,,,,,1,3,,,CA,,"Supertex, Inc.",10,94086,CA,1314145,73487663, P.O. Box 118,,Kent,,,,,1,3,,,OH,,Smithers-Oasis Company,20,44240,OH,1314150,73487665, ,12141 LEWIS ST.,GARDEN GROVE,,,,nonprofit corporation,1,99,,,CA,,"CRYSTAL CATHEDRAL OF THE REFORMED CHURCH IN AMERICA, INC., THE",20,92640,CA,1314155,73487668)
+
+Code : val duration = (System.nanoTime - runtime)
+Result for file with 16 partition: duration: Long = 106725465716
+
+Per the above comparison, file with 16 partitions performed better than file with 5 partitions. 
+For my analysis, and going forward, utilize the default partition size assigned (16 partition size). 
+Further, within this dataset, I am interested in three fields within this dataset. 
+(1. Owner name, 2. Serial no, 3. City where owner resides). Extract the above three fields for further exploration.
+
+Code: val traded = trademark.map(x => (x.split(",")(18),x.split(",")(13),x.split(",")(16))).take(10)
+
+(serial_no,own_name,own_addr_state_cd)
+(60146682,AUTO ORDNANCE CORPORATION,NY)
+(60149828,AUTO-ORDNANCE CORPORATION,NY)
+(3,"SAMSON ROPE TECHNOLOGIES,98248)
+(4,"SAMSON OCEAN SYSTEMS,98248)
+(5,"TOLMAN,)
+(70011408,SENOUR MANUFACTURING COMPANY,IL)
+(,,30)
+(,,30)
+(,"BURROUGHS,30)
+
+I
+
+n the results above, I noted there are several missing data, and Column name is included in the result as an observation.
+Move the data to spark dataframe, explore the data to better understand the structure and perform any clean up steps needed to prepare the dataset for further analyses. 
+
+
+Code: val trademark_Owner = traded.toDF
+Result: tradedf: org.apache.spark.sql.DataFrame = [_1: string, _2: string, _3: string]
+
+Code : trademarkdf.show
+Result : 
++---------+--------------------+-----------------+
+|       _1|                  _2|               _3|
++---------+--------------------+-----------------+
+|serial_no|            own_name|own_addr_state_cd|
+| 60146682|AUTO ORDNANCE COR...|               NY|
+| 60149828|AUTO-ORDNANCE COR...|               NY|
+|        3|"SAMSON ROPE TECH...|            98248|
+|        4|"SAMSON OCEAN SYS...|            98248|
+|        5|             "TOLMAN|                 |
+| 70011408|SENOUR MANUFACTUR...|               IL|
+|         |                    |               30|
+|         |                    |               30|
+|         |          "BURROUGHS|               30|
+| 70012355|RHEINGAUER SCHAUM...|                 |
+|       40|                    |             LTD.|
+|       12|        "MONTGOMERIE|                 |
+|       13|        "MONTGOMERIE|                 |
+|       40|                    |             LTD.|
+|       15|        "MONTGOMERIE|                 |
+| 70012857|N. K. FAIRBANK & ...|               IL|
+|       17|            "BDH TWO|            19808|
+| 70013054|NEW YORK CONDENSE...|               NY|
+|       19|     "ANHEUSER-BUSCH|            63118|
++---------+--------------------+-----------------+
+only showing top 20 rows
+
+
+
+Rename all the column, remove records with missing and bad data. 
+Code : val tradeowner = trademarkdf.withColumnRenamed("_1", "Serial_No").withColumnRenamed("_2","Owner_name").withColumnRenamed("_3","Owner_city”)
+tradeowner: org.apache.spark.sql.DataFrame = [Serial_No: string, Owner_name: string, Owner_city: string]
+
+Code val traded = tradeowner.filter(not($"Serial_No"<200))
+traded: org.apache.spark.sql.DataFrame = [Serial_No: string, Owner_name: string, Owner_city: string]
+
+Code : val tradedf = traded.filter(not($"Owner_city"===""))
+tradedf: org.apache.spark.sql.DataFrame = [Serial_No: string, Owner_name: string, Owner_city: string]
+
+Code : tradedf.show
+Result : 
++---------+--------------------+----------+
+|Serial_No|          Owner_name|Owner_city|
++---------+--------------------+----------+
+| 60146682|AUTO ORDNANCE COR...|        NY|
+| 60149828|AUTO-ORDNANCE COR...|        NY|
+| 70011408|SENOUR MANUFACTUR...|        IL|
+| 70012857|N. K. FAIRBANK & ...|        IL|
+| 70013054|NEW YORK CONDENSE...|        NY|
+| 70013299|REVERE RUBBER COM...|        MA|
+| 70013498|NEW YORK KNIFE CO...|        NY|
+| 70014244|THE SOLIDARITY CO...|        NY|
+| 70014527|  J. C. AYER COMPANY|        MA|
+| 70015086|       COLGATE & CO.|        NY|
+| 70015321|       JENKINS BROS.|        NY|
+| 70015801|NEW YORK CONDENSE...|        NY|
+| 70015960|STANDARD TYPE-WRI...|        NY|
+| 70017825|Aunt Jemima Manuf...|        MO|
+| 70017960|       SCOTT & BOWNE|        NY|
+| 70019225|        Beecham Inc.|        NJ|
+| 70019225|       Scott & Bowne|        NY|
+| 70019634|    Cott Corporation|        CT|
+| 70019634|    Millis; Henry L.|        MA|
+| 70019678|           BESTFOODS|        NJ|
++---------+--------------------+----------+
+only showing top 20 rows
+
+Review Records left with complete records
+Code: tradedf.count()
+Result : res20: Long = 13976750
+
+
+Second Dataset (Case File)
+
+In this file, there are approximately 71 fields. This file contains the detail of the individual trademark cases.  
+Column of interest (serial no, registration date, and the trademark case status). 
+
+Code : val tradecase = sc.textFile("case_file.csv")
+tradecase: org.apache.spark.rdd.RDD[String] = case_file.csv MapPartitionsRDD[1] at textFile at <console>:27
+
+Code : tradecase.count()
+Result res1: Long = 8607653
+
+Code: val casedf = tradedf.toDF
+Result : casedf: org.apache.spark.sql.DataFrame = [_1: string, _2: string, _3: string]
+
+Code : casedf.show
+Result : 
++---------+---------------+-------------+
+|       _1|             _2|           _3|
++---------+---------------+-------------+
+|serial_no|registration_dt|cfh_status_cd|
+| 60000001|     1870-10-25|          626|
+| 60000002|     1870-10-25|          626|
+| 60000003|     1870-10-25|          626|
+| 60000004|     1870-10-25|          626|
+| 60000005|     1870-10-25|          626|
+| 60000006|     1870-10-25|          626|
+| 60000007|     1870-10-25|          626|
+| 60000008|     1870-10-25|          626|
+| 60000009|     1870-10-25|          626|
+| 60000010|     1870-10-25|          626|
+| 60000011|     1870-10-25|          626|
+| 60000012|     1870-10-25|          626|
+| 60000013|     1870-10-25|          626|
+| 60000014|     1870-10-25|          626|
+| 60000015|     1870-10-25|          626|
+| 60000016|     1870-10-25|          626|
+| 60000017|     1870-11-01|          626|
+| 60000018|     1870-11-01|          626|
+| 60000019|     1870-11-01|          626|
++---------+---------------+-------------+
+only showing top 20 rows
+
+
+Rename column and clean dataset
+Code : val traded = casedf.withColumnRenamed("_1", "Serial_No").withColumnRenamed("_2","Registration_Date").withColumnRenamed("_3","Case_Status")
+traded: org.apache.spark.sql.DataFrame = [Serial_No: string, Registration_Date: string, Case_Status: string]
+
+Code :  traded.show
+Result : 
++---------+-----------------+-------------+
+|Serial_No|Registration_Date|  Case_Status|
++---------+-----------------+-------------+
+|serial_no|  registration_dt|cfh_status_cd|
+| 60000001|       1870-10-25|          626|
+| 60000002|       1870-10-25|          626|
+| 60000003|       1870-10-25|          626|
+| 60000004|       1870-10-25|          626|
+| 60000005|       1870-10-25|          626|
+| 60000006|       1870-10-25|          626|
+| 60000007|       1870-10-25|          626|
+| 60000008|       1870-10-25|          626|
+| 60000009|       1870-10-25|          626|
+| 60000010|       1870-10-25|          626|
+| 60000011|       1870-10-25|          626|
+| 60000012|       1870-10-25|          626|
+| 60000013|       1870-10-25|          626|
+| 60000014|       1870-10-25|          626|
+| 60000015|       1870-10-25|          626|
+| 60000016|       1870-10-25|          626|
+| 60000017|       1870-11-01|          626|
+| 60000018|       1870-11-01|          626|
+| 60000019|       1870-11-01|          626|
++---------+-----------------+-------------+
+only showing top 20 rows
+
+Code: val tradefilter = traded.filter(not($"Serial_No" === "serial_no"))
+tradefilter: org.apache.spark.sql.DataFrame = [Serial_No: string, Registration_Date: string, Case_Status: string]
+
+All case numbes should be below 1000
+Code: val tradecheck = tradefilter.filter(not($"Case_Status" > 1000))
+tradecheck: org.apache.spark.sql.DataFrame = [Serial_No: string, Registration_Date: string, Case_Status: string]
+
+Code: tradecheck.show
+Result: 
++---------+-----------------+-----------+
+|Serial_No|Registration_Date|Case_Status|
++---------+-----------------+-----------+
+| 60000001|       1870-10-25|        626|
+| 60000002|       1870-10-25|        626|
+| 60000003|       1870-10-25|        626|
+| 60000004|       1870-10-25|        626|
+| 60000005|       1870-10-25|        626|
+| 60000006|       1870-10-25|        626|
+| 60000007|       1870-10-25|        626|
+| 60000008|       1870-10-25|        626|
+| 60000009|       1870-10-25|        626|
+| 60000010|       1870-10-25|        626|
+| 60000011|       1870-10-25|        626|
+| 60000012|       1870-10-25|        626|
+| 60000013|       1870-10-25|        626|
+| 60000014|       1870-10-25|        626|
+| 60000015|       1870-10-25|        626|
+| 60000016|       1870-10-25|        626|
+| 60000017|       1870-11-01|        626|
+| 60000018|       1870-11-01|        626|
+| 60000019|       1870-11-01|        626|
+| 60000020|       1870-11-01|        626|
++---------+-----------------+-----------+
+only showing top 20 rows
+
+verify all records in this dataset has a case status above 1000
+Code : val tradecheck = tradefilter.filter(not($"Case_Status" > 1000))
+tradecheck: org.apache.spark.sql.DataFrame = [Serial_No: string, Registration_Date: string, Case_Status: string]
+
+Code : tradecheck.show
+Result : 
++---------+-----------------+-----------+
+|Serial_No|Registration_Date|Case_Status|
++---------+-----------------+-----------+
++---------+-----------------+-----------+
+
+
+Join Dataset 1 and Dataset 2
+
+Code: val tradejoin = tradefilter.join(tradedf,tradefilter("Serial_No1").equalTo(tradedf("Serial_No")), "inner").selectExpr("Serial_No1", "Registration_Date", "Case_Status", "Owner_name", "Owner_City").cache()
+tradejoin: org.apache.spark.sql.DataFrame = [Serial_No1: string, Registration_Date: string, Case_Status: string, Owner_name: string, Owner_City: string]
+
+Code : tradejoin.show
+Result : 
++----------+-----------------+-----------+--------------------+----------+
+|Serial_No1|Registration_Date|Case_Status|          Owner_name|Owner_City|
++----------+-----------------+-----------+--------------------+----------+
+|  70015801|       1888-08-21|        900|NEW YORK CONDENSE...|        NY|
+|  70020157|       1891-09-22|        900|THE NORTH MANCHES...|        IN|
+|  70032235|       1898-12-13|        900|     SWIFT & COMPANY|        IL|
+|  71005496|       1906-06-19|        800|LANMAN & KEMP-BAR...|        NJ|
+|  71014612|       1908-03-03|        710|NORVELL-SHAPLEIGH...|        MO|
+|  71016188|       1906-06-26|        900|DIAMOND CHAIN & M...|        IN|
+|  71021902|       1906-11-27|        900|STANDARD OIL COMPANY|        NJ|
+|  71023522|       1907-02-19|        900|VALVOLINE OIL COM...|        NJ|
+|  71035718|       1908-10-06|        900|CRUCIBLE STEEL CO...|        PA|
+|  71037220|       1909-03-16|        900|STROHMEYER & ARPE...|        NY|
+|  71057886|       1911-11-21|        800|CHEVRON INTELLECT...|        CA|
+|  71057886|       1911-11-21|        800|     CHEVRON IP INC.|        CA|
+|  71057886|       1911-11-21|        800|CHEVRON INTELLECT...|        CA|
+|  71057886|       1911-11-21|        800|         TEXACO INC.|        NY|
+|  71066796|       1914-08-11|        710| COLIBRI CORPORATION|        RI|
+|  71066796|       1914-08-11|        710|      KREMENTZ & CO.|        NJ|
+|  71082996|       1916-06-13|        800|HONEYWELL INTERNA...|        NJ|
+|  71082996|       1916-06-13|        800|HONEYWELL INTELLE...|        AZ|
+|  71082996|       1916-06-13|        800|   ALLIEDSIGNAL INC.|        NJ|
+|  71113351|       1919-02-18|        900|FISHER FLOURING M...|        WA|
++----------+-----------------+-----------+--------------------+----------+
+
+
+Question 1 - How many records do you have left after join? 
+
+Code: traderdd.count
+Result: res103: Long = 4534670
+
+Question 2 -  Move data back to rdd 
+
+Code : val traderdd = tradejoin.rdd
+traderdd: org.apache.spark.rdd.RDD[org.apache.spark.sql.Row] = MapPartitionsRDD[118] at rdd at <console>:57
+
+Question 3 - What state has the highest number of trademark in USA?
+
+Code : val higheststate = trademark.map(x => x.split(",")(4)).map(x => (x,1)).reduceByKey(_+_).cache()
+higheststate: org.apache.spark.rdd.RDD[(String, Int)] = ShuffledRDD[173] at reduceByKey at <console>:29
+
+Code:  val state = higheststate.map(x=> ((x._2),(x._1))).sortByKey(ascending=false).take(10).foreach(println)
+Result: 
+(800452,CA])
+(576540,NY])
+(293984,IL])
+(232411,NJ])
+(220168,FL])
+(210693,TX])
+(172201,PA])
+(168142,OH])
+(147983,MA])
+(127220,MI])
+state: Unit = ()
+
+Question 4 - What individual or organization has the highest trademark in USA? 
+
+Code : val maxtradeowner = trademark.map(x=>(x.split(",")(3),1)).reduceByKey(_+_)
+maxtradeowner: org.apache.spark.rdd.RDD[(String, Int)] = ShuffledRDD[225] at reduceByKey at <console>:29
+
+Code: maxtradeowner.map(x=>((x._2),(x._1))).sortByKey(ascending=false).take(10).foreach(println)
+Result: 
+(10219,VIACOM INTERNATIONAL INC.)
+(8938,JOHNSON & JOHNSON)
+(7692,IGT)
+(7398,Twentieth Century Fox Film Corporation)
+(6846,The Procter & Gamble Company)
+(5507,Bristol-Myers Squibb Company)
+(5197,Pfizer Inc.)
+(5181,Microsoft Corporation)
+(4894,Johnson & Johnson)
+(4398,FORD MOTOR COMPANY)
+
+According to this dataset, Viacom international INC has the most trademark in USA. They currently have approx.. 10k, followed by Johnson and Johnson. 
+
+
+
+
+
+ 
